@@ -13,13 +13,15 @@ Appendix
 > crossWith :: (a -> b -> c) -> [a] -> [b] -> [c]
 > crossWith f xs ys = [f x y | x <- xs, y <- ys]
 
-> cross = crossWith (\a b -> a:b:[])
+> join a b = a:b:[]
+
+> cross = crossWith join
 
 
 Notation
 ========
 
-First we have to agree on some notation.
+First we need to define some notation.
 
 A Sudoku puzzle is a grid of 81 squares; the majority of enthusiasts label the
 columns 1-9 and the rows A-I.
@@ -32,7 +34,6 @@ columns 1-9 and the rows A-I.
 > squares = cross rows cols
 
 A collection of nine squares (column, row, or box) is called a unit.
-
 
 > units :: Square -> [[Square]]
 > units s = filter (elem s) (col ++ row ++ box)
@@ -94,31 +95,6 @@ characters are ignored.
 >   | isDigit x = Just (read [x] :: Int) : tokenize xs
 >   | otherwise = tokenize xs
 
-To build a grid, we cannot just parse a grid and assign the given values to
-Knowns and blank values to Unknown [1..9] since that would produce an
-inconsistent grid. Rather, we start with an empty grid and assign it the initial
-values in order to ensure the the Unknowns are in a consistent state when we
-are done.
-
-> emptyGrid :: Grid
-> emptyGrid = M.fromList $ zip squares (repeat (Unknown values))
-
-> initialValues :: String -> [(Square, Int)]
-> initialValues s = [(s, i) | s <- squares, i <- (catMaybes $ tokenize s)]
-
-> elim :: Int -> Possibilty -> Possibilty
-> elim _ (Known x) = Known x
-> elim i (Unknown xs) = Unknown (xs `without` i)
-
-> elimFromPeers :: Grid -> Square -> Int -> Grid
-> elimFromPeers g s i = foldl (\h k -> M.adjust (elim i) k h) g (peers s)
-
-> assign :: Grid -> (Square, Int) -> Grid
-> assign g (s, i) = M.insert s (Known i) (elimFromPeers g s i)
-
-> parseGrid :: String -> Grid
-> parseGrid g = foldl assign emptyGrid (initialValues g)
-
 Thus, the following grids are all equivalent:
 
 4.....8.5.3..........7......2.....6.....8.4......1.......6.3.7.5..2.....1.4......
@@ -145,15 +121,64 @@ Thus, the following grids are all equivalent:
 5 . . |2 . . |. . . 
 1 . 4 |. . . |. . .
 
+
+To parse a grid, we cannot just assign digits to a Known and non-digits to
+Unknown [1..9] since that would produce an inconsistent grid.
+
+Instead, we start with an empty grid and, one at a time, assign it the initial
+values ensuring that the grid is in a consistent state after each assignment.
+
+> emptyGrid :: Grid
+> emptyGrid = M.fromList $ zip squares (repeat (Unknown values))
+
+> initialValues :: String -> [(Square, Int)]
+> initialValues s = foldl f [] $ zip squares (tokenize s)
+>   where
+>       f xs (_, Nothing) = xs
+>       f xs (s, Just i)  = (s, i) : xs
+
+> elim :: Int -> Possibilty -> Possibilty
+> elim i (Unknown xs) = Unknown (xs `without` i)
+> elim _ (Known x) = Known x
+
+> elimFromPeers :: Grid -> Square -> Int -> Grid
+> elimFromPeers g s i = foldl (\g' k -> M.adjust (elim i) k g') g (peers s)
+
+> assign :: Grid -> (Square, Int) -> Grid
+> assign g (s, i) = M.insert s (Known i) (elimFromPeers g s i)
+
+> parseGrid :: String -> Grid
+> parseGrid g = foldl assign emptyGrid (initialValues g)
+
+
 Constraint Propogation
 ======================
+
+To solve simple sudoku puzzles, it is possible simply to apply the following
+rule until the puzzle is solved:
+
+    If a square has only one possible value, then put that value there.
+
+> prop1 :: Grid -> [(Square, Possibilty)] -> Grid
+> prop1 g [] = g
+> prop1 g ((s, Unknown xs):ys) = case xs of
+>   (x:[]) -> simplify $ assign g (s, x)
+>   _    -> prop1 g ys
+> prop1 g (x:xs) = prop1 g xs
+
+> simplify :: Grid -> Grid
+> simplify g = prop1 g $ M.toList g
+
+Search
+======
+
 
 
 
 
 > main = do
->   x <- readFile "puzzle1.sudoku"
->   print $ tokenize x
+>   x <- readFile "puzzle3.sudoku"
+>   print $ simplify $ parseGrid x
 
 
 
