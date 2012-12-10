@@ -58,6 +58,7 @@ solved if the squares in each unit are filled with a permutation of the digits
 
 That is, no digit can appear twice in a unit, and every digit must appear once.
 This implies that each square must have a different value from any of its peers.
+
 Here are the names of the squares, a typical puzzle, and the solution to the
 puzzle:
 
@@ -81,12 +82,12 @@ evident shortly.
 > type Grid = M.Map Square Possibilty
 
 > instance Show Possibilty where
->   show (Unknown xs) = show xs
+>   show (Unknown xs) = concat $ map show xs
 >   show (Known x) = show x
 
-We represent a Sudoku playing grid in text as a string of characters with
-1-9 indicating a digit and a 0 or period specifying an empty square. All other
-characters are ignored.
+Textually, we represent a grid as a string of characters with 1-9 indicating a
+digit and a 0 or a period specifying an empty square. All other characters are
+ignored.
 
 > tokenize :: String -> [Maybe Int]
 > tokenize [] = []
@@ -121,6 +122,8 @@ Thus, the following grids are all equivalent:
 5 . . |2 . . |. . . 
 1 . 4 |. . . |. . .
 
+Parsing
+=======
 
 To parse a grid, we cannot just assign digits to a Known and non-digits to
 Unknown [1..9] since that would produce an inconsistent grid.
@@ -175,20 +178,28 @@ Search
 
 
 
-
 > main = do
->   x <- readFile "puzzle3.sudoku"
->   print $ simplify $ parseGrid x
+>   x <- readFile "puzzle2.sudoku"
+>   putStrLn $ showGrid $ simplify $ parseGrid x
 
+Printy Printing
+===============
 
+> center :: Int -> String -> String
+> center i s
+>   | i > 1 + length s = " " ++ center (i - 2) s ++ " "
+>   | i > length s = ' ' : center (i - 1) s
+>   | otherwise = s
 
-
----
- instance Show Grid where
-   show (Grid g) = 
-       where
-           width = maximum $ map length $ map show (M.elems g)
-           divider = take width (repeat '-')
-           line = divider ++ "+" ++ divider ++ "+" ++ divider
-           showLine xs = concat $ intersperse "|" (map show xs)
-           line1
+> showGrid g = unlines $ concat $ intersperse [line] [
+>                                   [ showLine
+>                                       [ concat $ intersperse " " $ map (\x -> center width $ show x)
+>                                           [fromJust $ M.lookup (join r c) g | c <- cs]
+>                                       | cs <- ["123", "456", "789"]]
+>                                   | r <- rs]
+>                               | rs <- ["ABC", "DEF", "GHI"] ]
+>      where
+>          width = maximum $ map length $ map show (M.elems g)
+>          divider = take (width * 3 + 2) (repeat '-')
+>          line = divider ++ "+" ++ divider ++ "+" ++ divider
+>          showLine xs = (concat $ intersperse "|" xs)
