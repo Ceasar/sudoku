@@ -158,10 +158,23 @@ values ensuring that the grid is in a consistent state after each assignment.
 Constraint Propogation
 ======================
 
-To solve simple sudoku puzzles, it is possible simply to apply the following
-rule until the puzzle is solved:
+To solve simple sudoku puzzles, it is possible just to repeatedly look for
+squares that have only one possible value and put that value there.
 
-    If a square has only one possible value, then put that value there.
+For instance, here is a simple puzzle and its solution, which can be completely
+derived from application of the above rule.
+
+. . 3|. 2 .|6 . .       4 8 3|9 2 1|6 5 7
+9 . .|3 . 5|. . 1       9 6 7|3 4 5|8 2 1
+. . 1|8 . 6|4 . .       2 5 1|8 7 6|4 9 3
+-----+-----+-----       -----+-----+-----
+. . 8|1 . 2|9 . .       5 4 8|1 3 2|9 7 6
+7 . .|. . .|. . 8       7 2 9|5 6 4|1 3 8
+. . 6|7 . 8|2 . .       1 3 6|7 9 8|2 4 5
+-----+-----+-----       -----+-----+-----
+. . 2|6 . 9|5 . .       3 7 2|6 8 9|5 1 4
+8 . .|2 . 3|. . 9       8 1 4|2 5 3|7 6 9
+. . 5|. 1 .|3 . .       6 9 5|4 1 7|3 8 2
 
 > prop1 :: Grid -> [(Square, Possibilty)] -> Grid
 > prop1 g [] = g
@@ -172,6 +185,23 @@ rule until the puzzle is solved:
 
 > simplify :: Grid -> Grid
 > simplify g = prop1 g $ M.toList g
+
+However, as mentioned this does not work for all puzzles. When we apply the
+above to the puzzle below, we make very little progress.
+
+. . .|. . .|9 . 7       . . .|. . .|9 . 7
+. . .|4 2 .|1 8 .       . . .|4 2 .|1 8 .
+. . .|7 . 5|. 2 6       . . .|7 . 5|. 2 6
+-----+-----+-----       -----+-----+-----
+1 . .|9 . 4|. . .       1 . .|9 . 4|. . .
+. 5 .|. . .|. 4 .       . 5 .|. . .|. 4 .
+. . .|5 . 7|. . 9       . . .|5 . 7|. . 9
+-----+-----+-----       -----+-----+-----
+9 2 .|1 . 8|. . .       9 2 6|1 . 8|. . .
+. 3 4|. 5 9|. . .       8 3 4|. 5 9|. . .
+5 . 7|. . .|. . .       5 1 7|. . .|. . .
+
+The solution, as those familiar with Sudoku already know, is to guess and check.
 
 Search
 ======
