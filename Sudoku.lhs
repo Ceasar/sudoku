@@ -1,3 +1,4 @@
+> import System.Environment
 > import Data.Char
 > import Data.Maybe
 > import Data.List
@@ -82,7 +83,7 @@ evident shortly.
 > type Grid = M.Map Square Possibilty
 
 > instance Show Possibilty where
->   show (Unknown xs) = concat $ map show xs
+>   show (Unknown xs) = "." -- concat $ map show xs
 >   show (Known x) = show x
 
 Textually, we represent a grid as a string of characters with 1-9 indicating a
@@ -176,12 +177,6 @@ Search
 ======
 
 
-
-
-> main = do
->   x <- readFile "puzzle2.sudoku"
->   putStrLn $ showGrid $ simplify $ parseGrid x
-
 Printy Printing
 ===============
 
@@ -203,3 +198,15 @@ Printy Printing
 >          divider = take (width * 3 + 2) (repeat '-')
 >          line = divider ++ "+" ++ divider ++ "+" ++ divider
 >          showLine xs = (concat $ intersperse "|" xs)
+
+Command Line
+============
+
+> main = do
+>   args <- getArgs
+>   mapM solve args
+
+> solve s = do
+>   x <- readFile s
+>   putStrLn $ showGrid $ parseGrid x
+>   putStrLn $ showGrid $ simplify $ parseGrid x
