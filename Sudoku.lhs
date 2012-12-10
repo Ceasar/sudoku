@@ -79,12 +79,19 @@ Abstractly, we represent a grid as a map between Squares and their possible
 values or the lone value if it is known. Why we do not use a 9x9 will become
 evident shortly.
 
-> data Possibilty = Unknown [Int] | Known Int
+> data Possibilty = Unknown [Int] | Known Int deriving Eq
 > type Grid = M.Map Square Possibilty
 
 > instance Show Possibilty where
->   show (Unknown xs) = "." -- concat $ map show xs
+>   show (Unknown xs) = concat $ map show xs
 >   show (Known x) = show x
+
+> instance Ord Possibilty where
+>   (Unknown as) `compare` (Unknown bs)
+>       | length as < length bs = LT
+>       | length as > length bs = GT
+>       | otherwise = EQ
+>   _ `compare` _ = EQ
 
 Textually, we represent a grid as a string of characters with 1-9 indicating a
 digit and a 0 or a period specifying an empty square. All other characters are
@@ -206,6 +213,19 @@ The solution, as those familiar with Sudoku already know, is to guess and check.
 Search
 ======
 
+> isKnown :: Possibilty -> Bool
+> isKnown (Known i) = True
+> isKnown _ = False
+
+> search :: Grid -> Maybe Grid
+> search g = case filter (\(_, p) -> not $ isKnown p) $ M.toList g of
+>   [] -> Just g
+>   unknowns -> case catMaybes [search $ simplify $ assign g (s, i) | i <- vals] of
+>       [] -> Nothing
+>       (x:xs) -> Just x
+>       where
+>           (s, Unknown vals) = minimum unknowns
+
 
 Printy Printing
 ===============
@@ -239,4 +259,7 @@ Command Line
 > solve s = do
 >   x <- readFile s
 >   putStrLn $ showGrid $ parseGrid x
->   putStrLn $ showGrid $ simplify $ parseGrid x
+>   let r = search $ simplify $ parseGrid x in
+>       case r of
+>           Nothing -> putStrLn "No solution"
+>           Just g -> putStrLn $ showGrid g
