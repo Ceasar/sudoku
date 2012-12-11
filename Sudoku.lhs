@@ -5,11 +5,14 @@
 > import qualified Data.Map as M
 
 
+The following is heavily based on "Solving Every Sudkou Puzzle" by Peter Norvig.
+
+
 Appendix
 ========
 
-> without :: Eq a => [a] -> a -> [a]
-> without xs x = filter (/= x) xs
+> without :: Eq a => a -> [a] -> [a]
+> without x xs = filter (/= x) xs
 
 > crossWith :: (a -> b -> c) -> [a] -> [b] -> [c]
 > crossWith f xs ys = [f x y | x <- xs, y <- ys]
@@ -29,8 +32,8 @@ columns 1-9 and the rows A-I.
 
 > type Square = String
 
-> rows   = "ABCDEFGHI"
-> cols   = "123456789"
+> rows = "ABCDEFGHI"
+> cols = "123456789"
 
 > squares = cross rows cols
 
@@ -47,15 +50,13 @@ A collection of nine squares (column, row, or box) is called a unit.
 Squares that share a unit are peers.
 
 > peers :: Square -> [Square]
-> peers s = (foldl union [] $ units s) `without` s
+> peers s = without s $ foldl union [] $ units s
 
 Every square has exactly 3 units and 20 peers.
 
 A puzzle leaves some squares blank and fills others with digits. A puzzle is
 solved if the squares in each unit are filled with a permutation of the digits
 1 to 9.
-
-> values = [1..9]
 
 That is, no digit can appear twice in a unit, and every digit must appear once.
 This implies that each square must have a different value from any of its peers.
@@ -79,19 +80,12 @@ Abstractly, we represent a grid as a map between Squares and their possible
 values or the lone value if it is known. Why we do not use a 9x9 will become
 evident shortly.
 
-> data Possibilty = Unknown [Int] | Known Int deriving Eq
+> type Possibilty = Either Int [Int]
 > type Grid = M.Map Square Possibilty
 
-> instance Show Possibilty where
->   show (Unknown xs) = concat $ map show xs
->   show (Known x) = show x
-
-> instance Ord Possibilty where
->   (Unknown as) `compare` (Unknown bs)
->       | length as < length bs = LT
->       | length as > length bs = GT
->       | otherwise = EQ
->   _ `compare` _ = EQ
+ instance Show Possibilty where
+   show (Possibility  xs) = concat $ map show xs
+   show (Left x) = show x
 
 Textually, we represent a grid as a string of characters with 1-9 indicating a
 digit and a 0 or a period specifying an empty square. All other characters are
@@ -133,40 +127,45 @@ Thus, the following grids are all equivalent:
 Parsing
 =======
 
-To parse a grid, we cannot just assign digits to a Known and non-digits to
-Unknown [1..9] since that would produce an inconsistent grid.
+To parse a grid, we cannot just assign digits to a Left and non-digits to
+Right [1..9] since that would produce an inconsistent grid.
 
 Instead, we start with an empty grid and, one at a time, assign it the initial
 values ensuring that the grid is in a consistent state after each assignment.
 
 > emptyGrid :: Grid
-> emptyGrid = M.fromList $ zip squares (repeat (Unknown values))
+> emptyGrid = M.fromList $ zip squares (repeat (Right [1..9]))
 
-> initialValues :: String -> [(Square, Int)]
-> initialValues s = foldl f [] $ zip squares (tokenize s)
+> initialValues :: String -> M.Map Square Int
+> initialValues = foldl f M.empty . zip squares . tokenize
 >   where
->       f xs (_, Nothing) = xs
->       f xs (s, Just i)  = (s, i) : xs
+>       f m (s, Just i)  = M.insert s i m
+>       f m (_, Nothing) = m
 
-> elim :: Int -> Possibilty -> Possibilty
-> elim i (Unknown xs) = Unknown (xs `without` i)
-> elim _ (Known x) = Known x
+> elimFromPeers :: Square -> Int -> Grid -> Grid
+> elimFromPeers s i g = foldl (\g' k -> M.adjust (either Left (Right . without i)) k g') g (peers s)
 
-> elimFromPeers :: Grid -> Square -> Int -> Grid
-> elimFromPeers g s i = foldl (\g' k -> M.adjust (elim i) k g') g (peers s)
-
-> assign :: Grid -> (Square, Int) -> Grid
-> assign g (s, i) = M.insert s (Known i) (elimFromPeers g s i)
+> assign :: Square -> Int -> Grid -> Grid
+> assign s i g = M.insert s (Left i) (elimFromPeers s i g)
 
 > parseGrid :: String -> Grid
-> parseGrid g = foldl assign emptyGrid (initialValues g)
+> parseGrid = M.foldWithKey assign emptyGrid . initialValues
 
 
 Constraint Propogation
 ======================
 
-To solve simple sudoku puzzles, it is possible just to repeatedly look for
-squares that have only one possible value and put that value there.
+To solve simple sudoku puzzles, it is possible just to apply constraints until
+the puzzle is solved.
+
+For instance, one constraint is that if all of the squares in a unit are known
+except one, the last one can be deduced.
+
+> unknowns :: Grid -> M.Map Square [Int]
+> unknowns = snd . M.mapEither id
+
+> simplify :: Grid -> Grid
+> simplify g = M.foldWithKey assign g $ M.map head $ M.filter ((== 1) . length) $ unknowns g
 
 For instance, here is a simple puzzle and its solution, which can be completely
 derived from application of the above rule.
@@ -183,18 +182,7 @@ derived from application of the above rule.
 8 . .|2 . 3|. . 9       8 1 4|2 5 3|7 6 9
 . . 5|. 1 .|3 . .       6 9 5|4 1 7|3 8 2
 
-> prop1 :: Grid -> [(Square, Possibilty)] -> Grid
-> prop1 g [] = g
-> prop1 g ((s, Unknown xs):ys) = case xs of
->   (x:[]) -> simplify $ assign g (s, x)
->   _    -> prop1 g ys
-> prop1 g (x:xs) = prop1 g xs
-
-> simplify :: Grid -> Grid
-> simplify g = prop1 g $ M.toList g
-
-However, as mentioned this does not work for all puzzles. When we apply the
-above to the puzzle below, we make very little progress.
+However, as mentioned this does not work for all puzzles. For instance:
 
 . . .|. . .|9 . 7       . . .|. . .|9 . 7
 . . .|4 2 .|1 8 .       . . .|4 2 .|1 8 .
@@ -208,46 +196,123 @@ above to the puzzle below, we make very little progress.
 . 3 4|. 5 9|. . .       8 3 4|. 5 9|. . .
 5 . 7|. . .|. . .       5 1 7|. . .|. . .
 
-The solution, as those familiar with Sudoku already know, is to guess and check.
+We are still a long way away from solving the puzzle. So, what's next?
 
-Search
-======
+We could try to code more sophisticated strategies. For example, the _naked
+twins_ strategy looks for two squares in the same unit that both have same
+possible two digits. Given [..., ("A5", [2, 6]), ("A6", [2,7]), ...], we can
+conclude that 2 and 6 must be in A5 and A6 (although we don't know which is
+where) and we can therefore eliminate 2 and 6 from every other square in the 'A'
+row unit.
 
-> isKnown :: Possibilty -> Bool
-> isKnown (Known i) = True
-> isKnown _ = False
+Coding up strategies like this is a possible route, but it would require
+hundreds of lines of code (there are dozens of these strategies), and we'd never
+be sure if we could solve _every_ puzzle.
+
+The other route is to _search_ for a solution: to systematically try all the
+possiblities until we hit one that works. The code for this is less than a dozen
+lines, but we run another risk: the program might take forever to run. How can
+we cope with this? There are two choices.
+
+First, we could try a brute force approach. Suppose we have a very efficient
+program that takes only one instruction to evaluate a position, and that we have
+access to the next-generation computing technology, let's say a 10GHz processor
+with 1024 cores, and let's say we could afford a million of them, and while
+we're shopping, let's say we also pick up a time machine and go back 13 billion
+years to the origin of the universe and start our program running. We can then
+compute that we'd be almost 1% done with this one puzzle by now.
+
+The second choice is to somehow process more than one possiblity per machine
+instruction. That seems impossible, but fortunately it is exactly what
+constraint propgation does for us. We don't have to try every possiblity because
+as soon as we try one, we immediately eliminate many other possibilities. For
+example, if we try an assignment and discover a contradiction, then we've
+eliminated not just one possiblity, but fully half of the choices we would have
+had to make.
+
+> hasContradiction :: Grid -> Bool
+> hasContradiction = not . M.null . M.filter null . unknowns
+
+> isSolved :: Grid -> Bool
+> isSolved = M.null . unknowns
+
+What is the search algorithm? Simple: first make sure we haven't already found a
+solution or contradiction, and if not, choose one unfilled square and consider
+all its possible values. One at a time, try assigning the square each value, and
+searching from the resulting position.
 
 > search :: Grid -> Maybe Grid
-> search g = case filter (\(_, p) -> not $ isKnown p) $ M.toList g of
->   [] -> Just g
->   unknowns -> case catMaybes [search $ simplify $ assign g (s, i) | i <- vals] of
->       [] -> Nothing
->       (x:xs) -> Just x
->       where
->           (s, Unknown vals) = minimum unknowns
+> search g
+>   | hasContradiction g = Nothing
+>   | isSolved g = Just g
+>   | otherwise = case catMaybes [search $ assign s i g | i <- vals] of
+>           [] -> Nothing -- All were contradictions
+>           (x:xs) -> Just x -- Found a solution
+>           where
+>               (s, vals) = chooseUnknown $ M.toList $ unknowns g
+
+In other words, we search for a value 'd' such that we can successfully search
+for a solution from the result of assigning square 's' to 'd'. If the search
+leads to a failed position, go back and consider another value of 'd'.
+
+This is a _recursive_ search, and we call it a "depth-first search" because
+we (recursively) consider all possiblity values before we consider a different
+value for 's'.
+
+There are two choices we have to make in implementing the search: "variable
+ordering" (which square do we try first?) and "value ordering" (which digit do
+we try first for the square?).
+
+For variable ordering, we will use a common heuristic called "minimum remaining
+values", which means that we choose the square (or one of the squares) with the
+minimum number of possible values. Why? Consider we chose a square with 7
+possiblities: we'd expect to guess wrong with probability 6/7. If instead we
+chose a square with only 2 possibilities, we'd expect to guess wrong with
+probability only 1/2. Thus we choose the square with the fewest possibilities
+and the best chance of guessing right.
+
+> chooseUnknown :: [(Square, [Int])] -> (Square, [Int])
+> chooseUnknown = minimumBy (\a b -> (length $ snd a) `compare` (length $ snd b))
+
+For value ordering, we won't do anything special; we'll consider the digits in
+numeric order.
+
+Now we're ready to define `solve` in terms of `search`.
+
+> solve :: FilePath -> IO ()
+> solve s = do
+>   x <- readFile s
+>   putStrLn $ showGrid $ parseGrid x
+>   let r = search $ parseGrid x in
+>       case r of
+>           Nothing -> putStrLn "No solution"
+>           Just g -> putStrLn $ showGrid g
 
 
 Printy Printing
 ===============
 
-> center :: Int -> String -> String
-> center i s
->   | i > 1 + length s = " " ++ center (i - 2) s ++ " "
->   | i > length s = ' ' : center (i - 1) s
->   | otherwise = s
 
 > showGrid g = unlines $ concat $ intersperse [line] [
 >                                   [ showLine
->                                       [ concat $ intersperse " " $ map (\x -> center width $ show x)
+>                                       [ concat $ intersperse " " $ map (\x -> center width $ showPos x)
 >                                           [fromJust $ M.lookup (join r c) g | c <- cs]
 >                                       | cs <- ["123", "456", "789"]]
 >                                   | r <- rs]
 >                               | rs <- ["ABC", "DEF", "GHI"] ]
 >      where
->          width = maximum $ map length $ map show (M.elems g)
+>          width = maximum $ map length $ map showPos (M.elems g)
 >          divider = take (width * 3 + 2) (repeat '-')
 >          line = divider ++ "+" ++ divider ++ "+" ++ divider
 >          showLine xs = (concat $ intersperse "|" xs)
+>          showPos :: Possibilty -> String
+>          showPos (Left i) = show i
+>          showPos (Right is) = "."
+>          center :: Int -> String -> String
+>          center i s
+>               | i > 1 + length s = " " ++ center (i - 2) s ++ " "
+>               | i > length s = ' ' : center (i - 1) s
+>               | otherwise = s
 
 Command Line
 ============
@@ -255,11 +320,3 @@ Command Line
 > main = do
 >   args <- getArgs
 >   mapM solve args
-
-> solve s = do
->   x <- readFile s
->   putStrLn $ showGrid $ parseGrid x
->   let r = search $ simplify $ parseGrid x in
->       case r of
->           Nothing -> putStrLn "No solution"
->           Just g -> putStrLn $ showGrid g
