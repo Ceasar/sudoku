@@ -165,7 +165,11 @@ except one, the last one can be deduced.
 > unknowns = snd . M.mapEither id
 
 > simplify :: Grid -> Grid
-> simplify g = M.foldWithKey assign g $ M.map head $ M.filter ((== 1) . length) $ unknowns g
+> simplify g
+>   | M.null singletons = g
+>   | otherwise = simplify $ M.foldWithKey assign g $ M.map head singletons
+>   where
+>       singletons = M.filter ((== 1) . length) $ unknowns g 
 
 For instance, here is a simple puzzle and its solution, which can be completely
 derived from application of the above rule.
