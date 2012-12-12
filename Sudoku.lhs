@@ -1,3 +1,4 @@
+> {-# LANGUAGE FlexibleInstances #-}
 > import System.Environment
 > import Data.Char
 > import Data.Maybe
@@ -5,21 +6,7 @@
 > import qualified Data.Map as M
 
 
-The following is heavily based on "Solving Every Sudkou Puzzle" by Peter Norvig.
-
-
-Appendix
-========
-
-> without :: Eq a => a -> [a] -> [a]
-> without x xs = filter (/= x) xs
-
-> crossWith :: (a -> b -> c) -> [a] -> [b] -> [c]
-> crossWith f xs ys = [f x y | x <- xs, y <- ys]
-
-> join a b = a:b:[]
-
-> cross = crossWith join
+The following is heavily based on "Solving Every Sudoku Puzzle" by Peter Norvig.
 
 
 Notation
@@ -32,31 +19,40 @@ columns 1-9 and the rows A-I.
 
 > type Square = String
 
-> rows = "ABCDEFGHI"
-> cols = "123456789"
+> rowLabels = "ABCDEFGHI"
+> colLabels = "123456789"
 
-> squares = cross rows cols
+> join :: a -> a -> [a]
+> join a b = a:b:[]
+
+> cross :: [a] -> [a] -> [[a]]
+> cross xs ys = [join x y | x <- xs, y <- ys]
+
+> squares :: [Square]
+> squares = cross rowLabels colLabels
 
 A collection of nine squares (column, row, or box) is called a unit.
 
-> units :: Square -> [[Square]]
-> units s = filter (elem s) (col ++ row ++ box)
->       where
->               col = [cross rows [c] | c <- cols]
->               row = [cross [r] cols | r <- rows]
->               box = [cross rs cs | rs <- ["ABC", "DEF", "GHI"],
->                                    cs <- ["123", "456", "789"]]
+> rows = [cross [r] colLabels | r <- rowLabels]
+> cols = [cross rowLabels [c] | c <- colLabels]
+> boxes = [cross rs cs | rs <- ["ABC", "DEF", "GHI"],
+>                        cs <- ["123", "456", "789"]]
+
+> units :: [[Square]]
+> units = cols ++ rows ++ boxes
 
 Squares that share a unit are peers.
 
-> peers :: Square -> [Square]
-> peers s = without s $ foldl union [] $ units s
+> peers :: M.Map Square [Square]
+> peers = M.fromList $ [(s, delete s $ foldl union [] $ filter (elem s) units) | s <- squares]
 
 Every square has exactly 3 units and 20 peers.
 
 A puzzle leaves some squares blank and fills others with digits. A puzzle is
 solved if the squares in each unit are filled with a permutation of the digits
 1 to 9.
+
+> values = [1..9]
 
 That is, no digit can appear twice in a unit, and every digit must appear once.
 This implies that each square must have a different value from any of its peers.
@@ -143,7 +139,7 @@ values ensuring that the grid is in a consistent state after each assignment.
 >       f m (_, Nothing) = m
 
 > elimFromPeers :: Square -> Int -> Grid -> Grid
-> elimFromPeers s i g = foldl (\g' k -> M.adjust (either Left (Right . without i)) k g') g (peers s)
+> elimFromPeers s i g = foldl (\g' k -> M.adjust (either Left (Right . delete i)) k g') g (fromJust $ M.lookup s peers)
 
 > assign :: Square -> Int -> Grid -> Grid
 > assign s i g = M.insert s (Left i) (elimFromPeers s i g)
@@ -169,7 +165,7 @@ except one, the last one can be deduced.
 >   | M.null singletons = g
 >   | otherwise = simplify $ M.foldWithKey assign g $ M.map head singletons
 >   where
->       singletons = M.filter ((== 1) . length) $ unknowns g 
+>       singletons = M.filter ((== 1) . length) $ unknowns g
 
 For instance, here is a simple puzzle and its solution, which can be completely
 derived from application of the above rule.
@@ -245,15 +241,33 @@ solution or contradiction, and if not, choose one unfilled square and consider
 all its possible values. One at a time, try assigning the square each value, and
 searching from the resulting position.
 
-> search :: Grid -> Maybe Grid
-> search g
->   | hasContradiction g = Nothing
->   | isSolved g = Just g
->   | otherwise = case catMaybes [search $ assign s i g | i <- vals] of
->           [] -> Nothing -- All were contradictions
->           (x:xs) -> Just x -- Found a solution
->           where
->               (s, vals) = chooseUnknown $ M.toList $ unknowns g
+What Norvig is describing is an instance of a backtracking algorithm, which has three main components.
+
+Formally, a backtracking algorithm needs three parts:
+
+> class BT a where
+>   reject :: a -> Bool -- Stop searching if it can be determined a candidate is unsolvable
+>   accept :: a -> Bool -- Stop searching if we have found a solution
+>   children :: a -> [a] -- Generate a list of children to continue the search
+
+A reject function which always evaluates True will result in a backtracking algorithm that is equivalent to a brute force search.
+
+Any other reject function 
+
+> search :: BT a => a -> Maybe a
+> search x
+>   | reject x = Nothing
+>   | accept x = Just x
+>   | otherwise = case catMaybes $ map search (children x) of
+>       [] -> Nothing
+>       (y:_) -> Just y
+
+> instance BT Grid where
+>   reject = hasContradiction
+>   accept = isSolved
+>   children g = [assign s i g | i <- vals]
+>       where
+>           (s, vals) = minRemVal $ M.toList $ unknowns g
 
 In other words, we search for a value 'd' such that we can successfully search
 for a solution from the result of assigning square 's' to 'd'. If the search
@@ -275,8 +289,8 @@ chose a square with only 2 possibilities, we'd expect to guess wrong with
 probability only 1/2. Thus we choose the square with the fewest possibilities
 and the best chance of guessing right.
 
-> chooseUnknown :: [(Square, [Int])] -> (Square, [Int])
-> chooseUnknown = minimumBy (\a b -> (length $ snd a) `compare` (length $ snd b))
+> minRemVal :: [(Square, [Int])] -> (Square, [Int])
+> minRemVal = minimumBy (\a b -> (length $ snd a) `compare` (length $ snd b))
 
 For value ordering, we won't do anything special; we'll consider the digits in
 numeric order.
@@ -311,7 +325,7 @@ Printy Printing
 >          showLine xs = (concat $ intersperse "|" xs)
 >          showPos :: Possibilty -> String
 >          showPos (Left i) = show i
->          showPos (Right is) = "."
+>          showPos (Right is) = show is -- "."
 >          center :: Int -> String -> String
 >          center i s
 >               | i > 1 + length s = " " ++ center (i - 2) s ++ " "
