@@ -1,9 +1,11 @@
 > {-# LANGUAGE FlexibleInstances #-}
 > import System.Environment
+> import System.Random
 > import Data.Char
-> import Data.Maybe
 > import Data.List
+> import Data.Maybe
 > import qualified Data.Map as M
+> import qualified Data.Set as S
 
 
 The following is heavily based on "Solving Every Sudoku Puzzle" by Peter Norvig.
@@ -28,23 +30,25 @@ columns 1-9 and the rows A-I.
 > cross :: [a] -> [a] -> [[a]]
 > cross xs ys = [join x y | x <- xs, y <- ys]
 
-> squares :: [Square]
-> squares = cross rowLabels colLabels
+> crossSet xs ys = S.fromList $ cross xs ys
+
+> squares :: S.Set Square
+> squares = crossSet rowLabels colLabels
 
 A collection of nine squares (column, row, or box) is called a unit.
 
-> rows = [cross [r] colLabels | r <- rowLabels]
-> cols = [cross rowLabels [c] | c <- colLabels]
-> boxes = [cross rs cs | rs <- ["ABC", "DEF", "GHI"],
->                        cs <- ["123", "456", "789"]]
+> rows = S.fromList [crossSet [r] colLabels | r <- rowLabels]
+> cols = S.fromList [crossSet rowLabels [c] | c <- colLabels]
+> boxs = S.fromList [crossSet rs cs | rs <- ["ABC", "DEF", "GHI"],
+>                                     cs <- ["123", "456", "789"]]
 
-> units :: [[Square]]
-> units = cols ++ rows ++ boxes
+> units :: S.Set (S.Set Square)
+> units = cols `S.union` rows `S.union` boxs
 
 Squares that share a unit are peers.
 
-> peers :: M.Map Square [Square]
-> peers = M.fromList $ [(s, delete s $ foldl union [] $ filter (elem s) units) | s <- squares]
+> peers :: M.Map Square (S.Set Square)
+> peers = M.fromList $ [(s, S.delete s $ S.fold S.union S.empty $ S.filter (S.member s) units) | s <- S.toList squares]
 
 Every square has exactly 3 units and 20 peers.
 
@@ -52,7 +56,7 @@ A puzzle leaves some squares blank and fills others with digits. A puzzle is
 solved if the squares in each unit are filled with a permutation of the digits
 1 to 9.
 
-> values = [1..9]
+> values = S.fromList [1..9]
 
 That is, no digit can appear twice in a unit, and every digit must appear once.
 This implies that each square must have a different value from any of its peers.
@@ -76,19 +80,8 @@ Abstractly, we represent a grid as a map between Squares and their possible
 values or the lone value if it is known.
 
 > type Knowns = M.Map Square Int
-> type Unknowns = M.Map Square [Int]
-> data Grid = Grid {knowns :: Knowns, unknowns :: Unknowns}
-
-> divide :: Int -> [a] -> [[a]]
-> divide i [] = []
-> divide i xs = case splitAt i xs of
->   (l, r) -> l : divide i r
-
-> center :: Int -> String -> String
-> center i s
->   | i > 1 + length s = " " ++ center (i - 2) s ++ " "
->   | i > length s = ' ' : center (i - 1) s
->   | otherwise = s
+> type Unknowns = M.Map Square (S.Set Int)
+> data Grid = Grid {knowns :: Knowns, unknowns :: Unknowns} deriving Eq
 
 > instance Show Grid where
 >   show (Grid k uk) = unlines rows
@@ -100,7 +93,11 @@ values or the lone value if it is known.
 >               Just v  -> show v
 >               Nothing -> "." -- concat $ map show $ fromJust $ M.lookup s uk
 >           rows :: [String]
->           rows = map concat $ divide (9 + 9) $ intersperse " " $ [f s | s<-squares]
+>           rows = map concat $ divide (9 + 9) $ intersperse " " $ [f s | s<-S.toList squares]
+>           divide :: Int -> [a] -> [[a]]
+>           divide i [] = []
+>           divide i xs = case splitAt i xs of
+>               (l, r) -> l : divide i r
 
 Textually, we represent a grid as a string of characters with 1-9 indicating a
 digit and a 0 or a period specifying an empty square. All other characters are
@@ -149,21 +146,19 @@ Instead, we start with an empty grid and, one at a time, assign it the initial
 values ensuring that the grid is in a consistent state after each assignment.
 
 > emptyGrid :: Grid
-> emptyGrid = Grid M.empty (M.fromList $ zip squares (repeat [1..9]))
+> emptyGrid = Grid M.empty (M.fromList $ zip (S.toList squares) (repeat values))
 
 > initialValues :: String -> Knowns
-> initialValues = foldl f M.empty . zip squares . tokenize
+> initialValues = foldl f M.empty . zip (S.toList squares) . tokenize
 >   where
 >       f m (s, Just i)  = M.insert s i m
 >       f m (_, Nothing) = m
 
-> foo :: Ord k => (a -> a) -> [k] -> M.Map k a -> M.Map k a
-> foo f ks m = foldl (\m' k -> M.adjust f k m') m ks
+> foldAdjust :: Ord k => (a -> a) -> S.Set k -> M.Map k a -> M.Map k a
+> foldAdjust f ks m = foldl (\m' k -> M.adjust f k m') m (S.toList ks)
 
 > elimFromPeers :: Square -> Int -> Unknowns -> Unknowns
-> elimFromPeers s i g = foo (delete i) ps g
->   where
->       ps = fromJust $ M.lookup s peers
+> elimFromPeers s i g = foldAdjust (S.delete i) (justLookup s peers) g
 
 > assign :: Square -> Int -> Grid -> Grid
 > assign s i (Grid k uk) = Grid (M.insert s i k) (M.delete s $ elimFromPeers s i uk)
@@ -174,7 +169,7 @@ values ensuring that the grid is in a consistent state after each assignment.
 Constraint Propogation
 ======================
 
-To solve simple sudoku puzzles, it is possible just to apply constraints until
+To solve simple puzzles, it is possible just to propogate constraints until
 the puzzle is solved.
 
 For instance, one constraint is that if all of the squares in a unit are known
@@ -183,12 +178,12 @@ except one, the last one can be deduced.
 > simplify :: Grid -> Grid
 > simplify g
 >   | M.null singletons = g
->   | otherwise = simplify $ M.foldWithKey assign g $ M.map head singletons
+>   | otherwise = simplify $ M.foldWithKey assign g $ M.map S.findMin singletons
 >   where
->       singletons = M.filter ((== 1) . length) $ unknowns g
+>       singletons = M.filter ((== 1) . S.size) $ unknowns g
 
-For instance, here is a simple puzzle and its solution, which can be completely
-derived from application of the above rule.
+As an example, here is a puzzle and its solution, which was derived strictly
+from application of the above rule.
 
 . . 3|. 2 .|6 . .       4 8 3|9 2 1|6 5 7
 9 . .|3 . 5|. . 1       9 6 7|3 4 5|8 2 1
@@ -202,7 +197,7 @@ derived from application of the above rule.
 8 . .|2 . 3|. . 9       8 1 4|2 5 3|7 6 9
 . . 5|. 1 .|3 . .       6 9 5|4 1 7|3 8 2
 
-However, as mentioned this does not work for all puzzles. For instance:
+As mentioned, our constraint propogation is not enough to solve all puzzles.
 
 . . .|. . .|9 . 7       . . .|. . .|9 . 7
 . . .|4 2 .|1 8 .       . . .|4 2 .|1 8 .
@@ -216,11 +211,11 @@ However, as mentioned this does not work for all puzzles. For instance:
 . 3 4|. 5 9|. . .       8 3 4|. 5 9|. . .
 5 . 7|. . .|. . .       5 1 7|. . .|. . .
 
-We are still a long way away from solving the puzzle. So, what's next?
+So, what's next?
 
 We could try to code more sophisticated strategies. For example, the _naked
 twins_ strategy looks for two squares in the same unit that both have same
-possible two digits. Given [..., ("A5", [2, 6]), ("A6", [2,7]), ...], we can
+possible two digits. Given [..., ("A5", [2, 6]), ("A6", [2, 6]), ...], we can
 conclude that 2 and 6 must be in A5 and A6 (although we don't know which is
 where) and we can therefore eliminate 2 and 6 from every other square in the 'A'
 row unit.
@@ -251,7 +246,7 @@ eliminated not just one possiblity, but fully half of the choices we would have
 had to make.
 
 > hasContradiction :: Grid -> Bool
-> hasContradiction = not . M.null . M.filter null . unknowns
+> hasContradiction = not . M.null . M.filter S.null . unknowns
 
 > isSolved :: Grid -> Bool
 > isSolved = M.null . unknowns
@@ -272,22 +267,52 @@ Formally, a backtracking algorithm needs three parts:
 
 A reject function which always evaluates True will result in a backtracking algorithm that is equivalent to a brute force search.
 
-Any other reject function 
+> solutions :: BT a => Eq a => a -> [a]
+> solutions x
+>   | reject x  = []
+>   | accept x  = x : []
+>   | otherwise = nub $ concat $ map solutions $ children x
 
-> search :: BT a => a -> Maybe a
-> search x
->   | reject x = Nothing
->   | accept x = Just x
->   | otherwise = case catMaybes $ map search (children x) of
->       [] -> Nothing
->       (y:_) -> Just y
+> search :: BT a => Eq a => a -> Maybe a
+> search x = case take 1 $ solutions x of
+>   [] -> Nothing
+>   (y:_) -> Just y
+
+> justLookup :: Ord k => k -> M.Map k a -> a
+> justLookup k m = fromJust $ M.lookup k m
+
+Note, when generating children, we actually only need to find one square and try that.
+Generating the full list of possible children is unnecessary since we try to assign
+every possible value to the square we choose, so one of them must be right.
+
+Also, for some reason, when I uncomment that line, this takes FOREVER to run.
+
+> guesses :: [Square] -> Grid -> [Grid]
+> guesses [] _ = []
+> guesses ks g@(Grid _ uk) = [assign s i g | i <- S.toList $ justLookup s uk] -- ++ guesses (delete s ks) g
+>   where s = minimumBy (cmpSquare uk) ks
+
+---
+Note, if we used regular sorting here, we would have to sort before searching.
+We use selection sort instead to keep things lazy.
+
+ sSortBy :: Eq a => (a -> a -> Ordering) -> [a] -> [a]
+ sSortBy cmp [] = []
+ sSortBy cmp xs = x : sSortBy cmp (delete x xs) where x = minimumBy cmp xs
+
+ minRemVal :: Unknowns -> [Square]
+ minRemVal uk = sSortBy (cmpSquare uk) (M.keys uk)
+---
+
+> cmpSquare :: Unknowns -> Square -> Square -> Ordering
+> cmpSquare uk a b = (remVals a) `compare` (remVals b)
+>   where
+>       remVals s = S.size $ justLookup s uk
 
 > instance BT Grid where
 >   reject = hasContradiction
 >   accept = isSolved
->   children g = [assign s i g | i <- vals]
->       where
->           (s, vals) = minRemVal $ M.toList $ unknowns g
+>   children g = guesses (M.keys $ unknowns g) g
 
 In other words, we search for a value 'd' such that we can successfully search
 for a solution from the result of assigning square 's' to 'd'. If the search
@@ -309,23 +334,150 @@ chose a square with only 2 possibilities, we'd expect to guess wrong with
 probability only 1/2. Thus we choose the square with the fewest possibilities
 and the best chance of guessing right.
 
-> minRemVal :: [(Square, [Int])] -> (Square, [Int])
-> minRemVal = minimumBy (\a b -> (length $ snd a) `compare` (length $ snd b))
-
 For value ordering, we won't do anything special; we'll consider the digits in
 numeric order.
 
 Now we're ready to define `solve` in terms of `search`.
 
-> solve :: FilePath -> IO ()
-> solve s = do
->   x <- readFile s
->   putStrLn $ show $ parseGrid x
->   let r = search $ parseGrid x in
->       case r of
->           Nothing -> putStrLn "No solution"
->           Just g -> putStrLn $ show g
+> readGrid :: FilePath -> IO Grid
+> readGrid f = do
+>   s <- readFile f
+>   return $ parseGrid s
+
+> solve :: Grid -> IO (Maybe Grid)
+> solve g = do
+>   return $ search g
+
+> solvePuzzle :: FilePath -> IO ()
+> solvePuzzle f = do
+>   g <- readGrid f
+>   putStrLn $ show g
+>   case search g of
+>       Nothing -> putStrLn "No solution"
+>       Just x -> putStrLn $ show x
+
+While good enough for most puzzles, there are a certain class of puzzles that
+the above cannot solve in a short time.
+
+For one, there is a class of problem which can be engineered to take advantage
+of the determinism of the algorithm in order to slow it down by carefully
+choosing inputs the algorithm will take a look time to find. This can be fixed
+by simply making the choice of square non-deterministic.
+
+Even with nondeterminism, Norvig still found some puzzles that were obnoxiously
+difficult to solve. I've provided a few inside of `puzzles` for demonstration
+purposes.
 
 > main = do
 >   args <- getArgs
->   mapM solve args
+>   mapM solvePuzzle args
+
+Puzzle Generation
+=================
+
+Now we consider how to generate puzzles.
+
+If we were not too picky, to generate a puzzle we might do the following:
+
+1. First generate a random valid grid.
+2. Remove values from the grid until we reach the difficulty level we are happy with.
+
+This procedure will guarantee that solution always exists. However, for many
+sorts of puzzles, Sudoku included, a puzzle is considered good only if it has
+exactly one solution.
+
+To generate unique puzzles, we need modify our algorithm only as follows:
+
+1. First generate a random valid grid.
+2. If we reached the desired difficulty level stop.
+3. Generate a list of value to remove from the grid.
+4. Choose one and check if there are multiple solutions.
+    - If so, try the next value. If no next values exist, stop.
+    - Otherwise, go to 2.
+
+While the above works, the problem is that it is unclear how long it will take
+to check if there are multiple solutions. To find one, we can use our
+strategies from above. But to show there aren't two or more for a puzzle
+that only has one solution means to exhaust all possibilities.
+
+For some problems, computing all the possibilities is a pain, but doable.
+Sudoku, as we already know, is one of those problems where it is not. As
+Norvig described above, the time to run a brute force algorithm is
+astronomical.
+
+Nevertheless, I am going to try this, and see how it goes.
+
+Generating a Random Grid
+------------------------
+
+The basic idea is use a Las Vegas algorithm to generate the grid.
+
+Namely, we will start with an empty grid, choose a bunch of squares to fill in
+and then run our solver to complete the grid.
+
+> pick :: [a] -> IO a
+> pick xs = do
+>   r <- randomRIO (0, length xs - 1)
+>   return $ xs !! r
+
+> genGrid :: IO Grid
+> genGrid = do
+>   s <- pick (S.toList squares)
+>   return $ fromJust $ search $ assign s 1 emptyGrid
+
+Kind of hacky, but this works for now.
+
+Removing Values
+---------------
+
+> addToPeers :: Square -> Int -> Unknowns -> Unknowns
+> addToPeers s i g = foldAdjust (S.insert i) (justLookup s peers) g
+
+> getPossibleValues :: Square -> Knowns -> S.Set Int
+> getPossibleValues s k = S.difference values $ S.fromList $ M.elems pmap
+>   where
+>       pmap = M.filterWithKey (\k' a -> S.member k' (justLookup s peers)) k
+
+> unassign :: Square -> Grid -> Grid
+> unassign s (Grid k uk) = Grid (M.delete s k) (addToPeers s i $ M.insert s ps uk)
+>   where
+>       ps = getPossibleValues s k
+>       i = fromJust $ M.lookup s k
+
+> genPuzzle :: Int -> IO Grid
+> genPuzzle 0 = genGrid
+> genPuzzle i = do
+>   g@(Grid k _) <- genPuzzle (i - 1)
+>   s <- pick (M.keys k)
+>   return $ unassign s g
+
+This works, although the difficult is unknowable. It's quite possible that
+there are multiple solutions, such that the puzzles we are creating might
+
+Another attempt:
+
+> newtype Puzzle = Puzzle Grid deriving (Eq, Show)
+
+> instance BT Puzzle where
+>   reject = hasMultipleSolutions
+>   accept = isHard
+>   children (Puzzle g) = [Puzzle $ unassign s g | s <- M.keys (knowns g)]
+
+
+I assume that if a puzzle has multiple solutions now, it can never be made
+to have a unique solution, which means we can use this to reject.
+
+> hasMultipleSolutions :: Puzzle -> Bool
+> hasMultipleSolutions (Puzzle g) = length (solutions g) > 1
+
+> isHard :: Puzzle -> Bool
+> isHard (Puzzle g) = 60 > (M.size $ knowns g)
+
+> genPuzzle' :: IO Grid
+> genPuzzle' = do
+>   g <- genGrid
+>   case search $ Puzzle g of
+>       Nothing -> error "no solutions"
+>       Just (Puzzle x) -> return x
+
+This works. Of course, because our definition was unclear.
