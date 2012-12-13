@@ -73,15 +73,34 @@ puzzle:
  I1 I2 I3| I4 I5 I6| I7 I8 I9    1 . 4 |. . . |. . .     1 6 4 |8 7 5 |2 9 3
 
 Abstractly, we represent a grid as a map between Squares and their possible
-values or the lone value if it is known. Why we do not use a 9x9 will become
-evident shortly.
+values or the lone value if it is known.
 
-> type Possibilty = Either Int [Int]
-> type Grid = M.Map Square Possibilty
+> type Knowns = M.Map Square Int
+> type Unknowns = M.Map Square [Int]
+> data Grid = Grid {knowns :: Knowns, unknowns :: Unknowns}
 
- instance Show Possibilty where
-   show (Possibility  xs) = concat $ map show xs
-   show (Left x) = show x
+> divide :: Int -> [a] -> [[a]]
+> divide i [] = []
+> divide i xs = case splitAt i xs of
+>   (l, r) -> l : divide i r
+
+> center :: Int -> String -> String
+> center i s
+>   | i > 1 + length s = " " ++ center (i - 2) s ++ " "
+>   | i > length s = ' ' : center (i - 1) s
+>   | otherwise = s
+
+> instance Show Grid where
+>   show (Grid k uk) = unlines rows
+>       where
+>           width = 1
+>           divider = take (width * 3 + 2) (repeat '-')
+>           line = divider ++ "+" ++ divider ++ "+" ++ divider
+>           f s = case M.lookup s k of
+>               Just v  -> show v
+>               Nothing -> "." -- concat $ map show $ fromJust $ M.lookup s uk
+>           rows :: [String]
+>           rows = map concat $ divide (9 + 9) $ intersperse " " $ [f s | s<-squares]
 
 Textually, we represent a grid as a string of characters with 1-9 indicating a
 digit and a 0 or a period specifying an empty square. All other characters are
@@ -130,23 +149,27 @@ Instead, we start with an empty grid and, one at a time, assign it the initial
 values ensuring that the grid is in a consistent state after each assignment.
 
 > emptyGrid :: Grid
-> emptyGrid = M.fromList $ zip squares (repeat (Right [1..9]))
+> emptyGrid = Grid M.empty (M.fromList $ zip squares (repeat [1..9]))
 
-> initialValues :: String -> M.Map Square Int
+> initialValues :: String -> Knowns
 > initialValues = foldl f M.empty . zip squares . tokenize
 >   where
 >       f m (s, Just i)  = M.insert s i m
 >       f m (_, Nothing) = m
 
-> elimFromPeers :: Square -> Int -> Grid -> Grid
-> elimFromPeers s i g = foldl (\g' k -> M.adjust (either Left (Right . delete i)) k g') g (fromJust $ M.lookup s peers)
+> foo :: Ord k => (a -> a) -> [k] -> M.Map k a -> M.Map k a
+> foo f ks m = foldl (\m' k -> M.adjust f k m') m ks
+
+> elimFromPeers :: Square -> Int -> Unknowns -> Unknowns
+> elimFromPeers s i g = foo (delete i) ps g
+>   where
+>       ps = fromJust $ M.lookup s peers
 
 > assign :: Square -> Int -> Grid -> Grid
-> assign s i g = M.insert s (Left i) (elimFromPeers s i g)
+> assign s i (Grid k uk) = Grid (M.insert s i k) (M.delete s $ elimFromPeers s i uk)
 
 > parseGrid :: String -> Grid
 > parseGrid = M.foldWithKey assign emptyGrid . initialValues
-
 
 Constraint Propogation
 ======================
@@ -156,9 +179,6 @@ the puzzle is solved.
 
 For instance, one constraint is that if all of the squares in a unit are known
 except one, the last one can be deduced.
-
-> unknowns :: Grid -> M.Map Square [Int]
-> unknowns = snd . M.mapEither id
 
 > simplify :: Grid -> Grid
 > simplify g
@@ -300,40 +320,11 @@ Now we're ready to define `solve` in terms of `search`.
 > solve :: FilePath -> IO ()
 > solve s = do
 >   x <- readFile s
->   putStrLn $ showGrid $ parseGrid x
+>   putStrLn $ show $ parseGrid x
 >   let r = search $ parseGrid x in
 >       case r of
 >           Nothing -> putStrLn "No solution"
->           Just g -> putStrLn $ showGrid g
-
-
-Printy Printing
-===============
-
-
-> showGrid g = unlines $ concat $ intersperse [line] [
->                                   [ showLine
->                                       [ concat $ intersperse " " $ map (\x -> center width $ showPos x)
->                                           [fromJust $ M.lookup (join r c) g | c <- cs]
->                                       | cs <- ["123", "456", "789"]]
->                                   | r <- rs]
->                               | rs <- ["ABC", "DEF", "GHI"] ]
->      where
->          width = maximum $ map length $ map showPos (M.elems g)
->          divider = take (width * 3 + 2) (repeat '-')
->          line = divider ++ "+" ++ divider ++ "+" ++ divider
->          showLine xs = (concat $ intersperse "|" xs)
->          showPos :: Possibilty -> String
->          showPos (Left i) = show i
->          showPos (Right is) = show is -- "."
->          center :: Int -> String -> String
->          center i s
->               | i > 1 + length s = " " ++ center (i - 2) s ++ " "
->               | i > length s = ' ' : center (i - 1) s
->               | otherwise = s
-
-Command Line
-============
+>           Just g -> putStrLn $ show g
 
 > main = do
 >   args <- getArgs
