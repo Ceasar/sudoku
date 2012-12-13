@@ -11,6 +11,9 @@
 The following is heavily based on "Solving Every Sudoku Puzzle" by Peter Norvig.
 
 
+> justLookup :: Ord k => k -> M.Map k a -> a
+> justLookup k m = fromJust $ M.lookup k m
+
 Notation
 ========
 
@@ -258,26 +261,18 @@ What Norvig is describing is an instance of a backtracking algorithm, which has 
 
 Formally, a backtracking algorithm needs three parts:
 
-> class BT a where
->   reject :: a -> Bool -- Stop searching if it can be determined a candidate is unsolvable
->   accept :: a -> Bool -- Stop searching if we have found a solution
->   children :: a -> [a] -- Generate a list of children to continue the search
-
 A reject function which always evaluates True will result in a backtracking algorithm that is equivalent to a brute force search.
 
-> solutions :: BT a => Eq a => a -> [a]
-> solutions x
->   | reject x  = []
->   | accept x  = x : []
->   | otherwise = nub $ concat $ map solutions $ children x
+> solutions :: Eq a => (a -> Bool) -> (a -> Bool) -> (a -> [a]) -> a -> [a]
+> solutions reject accept children root
+>   | reject root  = []
+>   | accept root  = root : []
+>   | otherwise = nub $ concat $ map (solutions reject accept children) $ children root
 
-> search :: BT a => Eq a => a -> Maybe a
-> search x = case take 1 $ solutions x of
+> search :: Eq a => (a -> Bool) -> (a -> Bool) -> (a -> [a]) -> a -> Maybe a
+> search reject accept children root = case take 1 $ solutions reject accept children root of
 >   [] -> Nothing
 >   (y:_) -> Just y
-
-> justLookup :: Ord k => k -> M.Map k a -> a
-> justLookup k m = fromJust $ M.lookup k m
 
 Note, when generating children, we actually only need to find one square and try that.
 Generating the full list of possible children is unnecessary since we try to assign
@@ -290,6 +285,14 @@ Also, for some reason, when I uncomment that line, this takes FOREVER to run.
 > guesses ks g@(Grid _ uk) = [assign s i g | i <- S.toList $ justLookup s uk] -- ++ guesses (delete s ks) g
 >   where s = minimumBy (cmpSquare uk) ks
 
+> cmpSquare :: Unknowns -> Square -> Square -> Ordering
+> cmpSquare uk a b = (remVals a) `compare` (remVals b)
+>   where
+>       remVals s = S.size $ justLookup s uk
+
+> subGrids :: Grid -> [Grid]
+> subGrids g = guesses (M.keys $ unknowns g) g
+
 ---
 Note, if we used regular sorting here, we would have to sort before searching.
 We use selection sort instead to keep things lazy.
@@ -301,16 +304,6 @@ We use selection sort instead to keep things lazy.
  minRemVal :: Unknowns -> [Square]
  minRemVal uk = sSortBy (cmpSquare uk) (M.keys uk)
 ---
-
-> cmpSquare :: Unknowns -> Square -> Square -> Ordering
-> cmpSquare uk a b = (remVals a) `compare` (remVals b)
->   where
->       remVals s = S.size $ justLookup s uk
-
-> instance BT Grid where
->   reject = hasContradiction
->   accept = isSolved
->   children g = guesses (M.keys $ unknowns g) g
 
 In other words, we search for a value 'd' such that we can successfully search
 for a solution from the result of assigning square 's' to 'd'. If the search
@@ -337,20 +330,21 @@ numeric order.
 
 Now we're ready to define `solve` in terms of `search`.
 
+> solutions' g = solutions hasContradiction isSolved subGrids g
+
+> solve :: Grid -> Maybe Grid
+> solve g = search hasContradiction isSolved subGrids g
+
 > readGrid :: FilePath -> IO Grid
 > readGrid f = do
 >   s <- readFile f
 >   return $ parseGrid s
 
-> solve :: Grid -> IO (Maybe Grid)
-> solve g = do
->   return $ search g
-
 > solvePuzzle :: FilePath -> IO ()
 > solvePuzzle f = do
 >   g <- readGrid f
 >   putStrLn $ show g
->   case search g of
+>   case solve g of
 >       Nothing -> putStrLn "No solution"
 >       Just x -> putStrLn $ show x
 
@@ -421,12 +415,16 @@ and then run our solver to complete the grid.
 > genGrid :: IO Grid
 > genGrid = do
 >   s <- pick (S.toList squares)
->   return $ fromJust $ search $ assign s 1 emptyGrid
+>   return $ fromJust $ solve $ assign s 1 emptyGrid -- known to be multiple solutions
 
 Kind of hacky, but this works for now.
 
 Removing Values
 ---------------
+
+Removing a value from the grid is procedurally pretty simple. We just delete
+it from the list of knowns, add it to the unknowns along with all the possible
+values it can take on, and update each of its peers to include it.
 
 > addToPeers :: Square -> Int -> Unknowns -> Unknowns
 > addToPeers s i g = foldAdjust (S.insert i) (justLookup s peers) g
@@ -442,6 +440,11 @@ Removing Values
 >       ps = getPossibleValues s k
 >       i = fromJust $ M.lookup s k
 
+Generation
+----------
+
+With that, we are ready to start generating some puzzles!
+
 > genPuzzle :: Int -> IO Grid
 > genPuzzle 0 = genGrid
 > genPuzzle i = do
@@ -449,36 +452,79 @@ Removing Values
 >   s <- pick (M.keys k)
 >   return $ unassign s g
 
-This works, although the difficult is unknowable. It's quite possible that
-there are multiple solutions, such that the puzzles we are creating might
+Running `genPuzzle 40` produces something like the following:
 
-Another attempt:
+. 3 . 1 . . 7 8 . 
+5 6 . 7 . 9 2 3 . 
+. 8 9 2 . 4 . . 6 
+. . . 5 . 7 . 6 8 
+. 5 . . 9 . 3 . 2 
+6 . . . 1 2 . 7 5 
+3 4 5 8 . . 6 . . 
+8 . . 9 . 3 . 4 1 
+. . . . . . 8 2 3
 
-> newtype Puzzle = Puzzle Grid deriving (Eq, Show)
+Unfortunately, we are not guaranteed that the puzzle will have a unique
+solution.
 
-> instance BT Puzzle where
->   reject = hasMultipleSolutions
->   accept = isHard
->   children (Puzzle g) = [Puzzle $ unassign s g | s <- M.keys (knowns g)]
+We can fix this naively, by just generating puzzles until we find one
+that has only one solution.
+
+> hasMultipleSolutions :: Grid -> Bool
+> hasMultipleSolutions g = length (solutions' g) > 1
+
+> genPuzzle2 :: Int -> IO Grid
+> genPuzzle2 0 = genGrid
+> genPuzzle2 i = do
+>   p <- genPuzzle i
+>   if hasMultipleSolutions p then genPuzzle2 i else return p
+
+However, this quickly becomes intractable. At N = 17, it starts taking a few
+seconds to complete. N = 20 is unbearable. As dicussed above, to see that a
+puzzle has exactly one solution involves testing every way of solving the
+puzzle.
 
 
-I assume that if a puzzle has multiple solutions now, it can never be made
-to have a unique solution, which means we can use this to reject.
+At this point, there are a few paths we could try to get around this:
 
-> hasMultipleSolutions :: Puzzle -> Bool
-> hasMultipleSolutions (Puzzle g) = length (solutions g) > 1
+- Decrease time to determine multiple solutions exist:
+    - Utilize constraints to reduce the number of possibilities we have to try.
+    - Determine some way to tell if a graph will have multiple solutions
+      without testing it.
+- Find some way to procedurally remove values that ensures that exactly one
+  solution is possible.
 
-> isHard :: Puzzle -> Bool
-> isHard (Puzzle g) = 60 > (M.size $ knowns g)
+The first I think doesn't really solve the problem. It will let us increase
+the depth that we can reach, and if we can get it down to only 17 clues that
+would be good enough. (For less than 17 clues, it is believed that multiple
+solutions will always exist.)
 
-> genPuzzle' :: IO Grid
-> genPuzzle' = do
->   g <- genGrid
->   case search $ Puzzle g of
->       Nothing -> error "no solutions"
->       Just (Puzzle x) -> return x
+The second I consider far more interesting, but it doesn't seem like it will
+be easy.
 
-This works. Of course, because our definition was unclear.
+Procedural Generation
+=====================
+
+Our problem now is to take a grid which is known to have exactly one solution
+and remove a value while ensuring that the grid still has exactly one soluton.
+
+The grid below is known to have one solution.
+
+Can you remove a value and prove it still has one soluton?
+
+1 5 . 2 . 4 7 8 . 
+7 8 9 5 1 6 2 3 4 
+. 3 4 7 8 9 1 5 6 
+. 2 1 4 . 5 8 . 7 
+8 4 5 9 7 . 3 6 2 
+6 9 7 3 . . 4 1 5 
+4 1 3 . . 7 9 . 8 
+5 7 2 8 9 . 6 4 1 
+9 6 8 1 . 2 5 7 3
+
+This one is easy of course. We can remove A1 without any trouble. The reason
+is that we can deduce that is the only place the 1 could go. This procedure
+would seem to the inverse of `simplify` from above.
 
 
 Appendix
