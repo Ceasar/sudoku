@@ -565,25 +565,29 @@ the end, the only method to reveal a value on the board is this method.
 And more...
 
 > instance Ord Grid where
->   compare a b = compare (knowns a) (knowns b)
+>   compare a b = compare (M.size $ unknowns a) (M.size $ unknowns b)
 
 
 > -- For now, just apply assign and exclude
 > applyForwardMethods :: Grid -> S.Set Grid
-> applyForwardMethods g@(Grid k uk) = assigned `S.union` excluded
+> applyForwardMethods g@(Grid k uk) = assigned -- `S.union` excluded
 >   where
 >       assigned = S.unions [S.map (\v -> assign s v g) (justLookup s uk) | s <- M.keys uk]
->       excluded = S.fromList [exclude s g | s <- M.keys k]
+>       -- excluded = S.fromList [exclude s g | s <- M.keys k]
+
+> applyBackwardMethods :: Grid -> S.Set Grid
+> applyBackwardMethods g@(Grid k uk) = assigned' -- `S.union` excluded'
+>   where
+>       assigned' = S.map (\s -> assign'  s g) (M.keysSet k)
+>       -- excluded' = S.map (\s -> exclude' s g) (M.keysSet k)
 
 > search' :: Grid -> S.Set Grid -> S.Set Grid -> Grid
-> search' q@(Grid k uk) gPs gSs = if S.null gCs then q else search' bC newPs gCs
+> search' q@(Grid k uk) gPs gSs = if S.null gCs then q else search' q' gPs' gCs
 >   where
->       assigned' = S.map (\s -> assign' s q) (M.keysSet k)
->       excluded' = S.map (\s -> exclude' s q) (M.keysSet k)
->       children = assigned' `S.union` excluded'
->       gCs = S.fromList [c | c <- (S.toList children), applyForwardMethods c `S.isSubsetOf` gPs]
->       bC = S.findMax gCs
->       newPs = applyForwardMethods bC
+>       children = applyBackwardMethods q
+>       gCs = S.filter (\c -> (applyForwardMethods c) `S.isSubsetOf` gPs) children
+>       q' = S.findMax gCs -- arbitrary choice based on Ord Grid
+>       gPs' = applyForwardMethods q' -- known to be good
 
 > startSearch :: Grid -> IO Grid
 > startSearch g = do
