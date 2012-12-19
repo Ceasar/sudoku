@@ -1,4 +1,7 @@
-> {-# LANGUAGE FlexibleInstances #-}
+> {-# LANGUAGE FlexibleInstances, OverlappingInstances #-}
+>
+> module Sudoku where
+>
 > import System.Environment
 > import System.Random
 > import Data.Char
@@ -7,22 +10,22 @@
 > import qualified Data.Map as M
 > import qualified Data.Set as S
 
+> import Test.QuickCheck
+
 
 The following is heavily based on "Solving Every Sudoku Puzzle" by Peter Norvig.
 
-
-> justLookup :: Ord k => k -> M.Map k a -> a
-> justLookup k m = fromJust $ M.lookup k m
 
 Notation
 ========
 
 First we need to define some notation.
 
-A Sudoku puzzle is a grid of 81 squares; the majority of enthusiasts label the
-columns 1-9 and the rows A-I.
+A Sudoku puzzle is a grid of 81 squares.
 
 > type Square = String
+
+The majority of enthusiasts label the columns 1-9 and the rows A-I.
 
 > rowLabels = "ABCDEFGHI"
 > colLabels = "123456789"
@@ -62,13 +65,29 @@ Squares that share a unit are peers.
 
 Every square has exactly 3 units and 20 peers.
 
-A puzzle leaves some squares blank and fills others with digits. A puzzle is
-solved if the squares in each unit are filled with a permutation of the digits
-1 to 9.
+> propUnits :: Square -> Bool
+> propUnits s = S.size (S.filter (S.member s) units) == 3
 
+> propPeers :: Square -> Bool
+> propPeers s = S.size (justLookup s peers) == 20
+
+A puzzle leaves some squares blank and fills others with digits.
+
+> type Value = Int
+
+> values :: S.Set Value
 > values = S.fromList [1..9]
 
+A puzzle is solved if the squares in each unit are filled with a permutation of the digits 1 to 9.
+
+> isSolved :: Grid -> Bool
+> isSolved (Grid k _) = all (== values) [lookupKeySet unit k | unit <- S.toList units]
+
+> propSolved :: Grid -> Property
+> propSolved g = isSolved g ==> M.null $ unknowns g
+
 That is, no digit can appear twice in a unit, and every digit must appear once.
+
 This implies that each square must have a different value from any of its peers.
 
 Representation
@@ -79,8 +98,8 @@ Abstractly, we represent a grid as two maps.
 The first is a map between Squares and known values.
 The second is a map between Squares and the possibilties for the square there.
 
-> type Knowns = M.Map Square Int
-> type Unknowns = M.Map Square (S.Set Int)
+> type Knowns = M.Map Square Value
+> type Unknowns = M.Map Square (S.Set Value)
 > data Grid = Grid {knowns :: Knowns, unknowns :: Unknowns} deriving Eq
 
 No square is permitted to exist in both maps.
@@ -143,17 +162,16 @@ values, updating the information in our unknown map on each assignment.
 >       f m (s, Just i)  = M.insert s i m
 >       f m (_, Nothing) = m
 
-> foldAdjust :: Ord k => (a -> a) -> S.Set k -> M.Map k a -> M.Map k a
-> foldAdjust f ks m = foldl (\m' k -> M.adjust f k m') m (S.toList ks)
+> exclude :: Square -> Grid -> Grid
+> exclude s (Grid k uk) = Grid k (foldAdjust (S.delete v) (justLookup s peers) uk)
+>   where
+>       v = justLookup s k
 
-> elimFromPeers :: Square -> Int -> Unknowns -> Unknowns
-> elimFromPeers s i g = foldAdjust (S.delete i) (justLookup s peers) g
-
-> assign :: Square -> Int -> Grid -> Grid
-> assign s i (Grid k uk) = Grid (M.insert s i k) (M.delete s $ elimFromPeers s i uk)
+> assign :: Square -> Value -> Grid -> Grid
+> assign s v (Grid k uk) = Grid (M.insert s v k) (M.delete s uk)
 
 > parseGrid :: String -> Grid
-> parseGrid = M.foldWithKey assign emptyGrid . initialValues
+> parseGrid = M.foldWithKey (\s v -> exclude s . assign s v) emptyGrid . initialValues
 
 Solving Puzzles
 ===============
@@ -172,7 +190,7 @@ except one, the last one can be deduced.
 > simplify :: Grid -> Grid
 > simplify g
 >   | M.null singletons = g
->   | otherwise = simplify $ M.foldWithKey assign g $ M.map S.findMin singletons
+>   | otherwise = simplify $ M.foldWithKey (\s v -> exclude s . assign s v) g $ M.map S.findMin singletons
 >   where
 >       singletons = M.filter ((== 1) . S.size) $ unknowns g
 
@@ -249,8 +267,6 @@ had to make.
 > hasContradiction :: Grid -> Bool
 > hasContradiction = not . M.null . M.filter S.null . unknowns
 
-> isSolved :: Grid -> Bool
-> isSolved = M.null . unknowns
 
 What is the search algorithm? Simple: first make sure we haven't already found a
 solution or contradiction, and if not, choose one unfilled square and consider
@@ -407,14 +423,9 @@ The basic idea is use a Las Vegas algorithm to generate the grid.
 Namely, we will start with an empty grid, choose a bunch of squares to fill in
 and then run our solver to complete the grid.
 
-> pick :: [a] -> IO a
-> pick xs = do
->   r <- randomRIO (0, length xs - 1)
->   return $ xs !! r
-
 > genGrid :: IO Grid
 > genGrid = do
->   s <- pick (S.toList squares)
+>   s <- pickOne (S.toList squares)
 >   return $ fromJust $ solve $ assign s 1 emptyGrid -- known to be multiple solutions
 
 Kind of hacky, but this works for now.
@@ -449,7 +460,7 @@ With that, we are ready to start generating some puzzles!
 > genPuzzle 0 = genGrid
 > genPuzzle i = do
 >   g@(Grid k _) <- genPuzzle (i - 1)
->   s <- pick (M.keys k)
+>   s <- pickOne (M.keys k)
 >   return $ unassign s g
 
 Running `genPuzzle 40` produces something like the following:
@@ -505,10 +516,12 @@ be easy.
 Procedural Generation
 =====================
 
+The following is heavily based on: http://www.math.washington.edu/~morrow/mcm/team2306.pdf
+
 Our problem now is to take a grid which is known to have exactly one solution
 and remove a value while ensuring that the grid still has exactly one soluton.
 
-The grid below is known to have one solution.
+For instance, the grid below is known to have one solution.
 
 Can you remove a value and prove it still has one soluton?
 
@@ -523,21 +536,78 @@ Can you remove a value and prove it still has one soluton?
 9 6 8 1 . 2 5 7 3
 
 This one is easy of course. We can remove A1 without any trouble. The reason
-is that we can deduce that is the only place the 1 could go. This procedure
-would seem to the inverse of `simplify` from above.
+is that we can deduce that is the only place the 1 could go.
+
+What this suggests is that we can take a variety of forward logical deductions,
+determine their inverses, and then apply them sequentially to a solved board
+to generate a puzzle.
+
+However, with the exception of the single candidate method, the inverse method
+is not always proper: one can utilize an inverse method to remove too much
+information from the board.
+
+> -- Remove an assigned value from the Grid
+> assign' :: Square -> Grid -> Grid
+> assign' s (Grid k uk) = Grid (M.delete s k) (M.insert s (S.singleton v) uk)
+>   where
+>       v = justLookup s k
+
+Every other method can be reduced to removing possiblities only, so  that in
+the end, the only method to reveal a value on the board is this method.
+
+> -- Given a known value, add it to the possibilities of all its peers
+> exclude' :: Square -> Grid -> Grid
+> exclude' s g@(Grid k uk) = Grid k (foldAdjust (S.insert v) ps uk)
+>   where
+>       v = justLookup s k
+>       ps = S.filter (\p -> M.member p uk) (justLookup s peers)
+
+And more...
+
+> instance Ord Grid where
+>   compare a b = compare (knowns a) (knowns b)
+
+
+> -- For now, just apply assign and exclude
+> applyForwardMethods :: Grid -> S.Set Grid
+> applyForwardMethods g@(Grid k uk) = assigned `S.union` excluded
+>   where
+>       assigned = S.unions [S.map (\v -> assign s v g) (justLookup s uk) | s <- M.keys uk]
+>       excluded = S.fromList [exclude s g | s <- M.keys k]
+
+> search' :: Grid -> S.Set Grid -> S.Set Grid -> Grid
+> search' q@(Grid k uk) gPs gSs = if S.null gCs then q else search' bC newPs gCs
+>   where
+>       assigned' = S.map (\s -> assign' s q) (M.keysSet k)
+>       excluded' = S.map (\s -> exclude' s q) (M.keysSet k)
+>       children = assigned' `S.union` excluded'
+>       gCs = S.fromList [c | c <- (S.toList children), applyForwardMethods c `S.isSubsetOf` gPs]
+>       bC = S.findMax gCs
+>       newPs = applyForwardMethods bC
+
+> startSearch :: Grid -> IO Grid
+> startSearch g = do
+>   let children = [assign' s g | s <- M.keys $ knowns g]
+>   child <- pickOne children
+>   return $ search' child (S.singleton g) (S.fromList children)
 
 
 Appendix
 ========
 
-> join :: a -> a -> [a]
-> join a b = a:b:[]
+> instance Arbitrary Square where
+>   arbitrary = elements (S.toList squares)
 
-> cross :: [a] -> [a] -> [[a]]
-> cross xs ys = [join x y | x <- xs, y <- ys]
+> instance Arbitrary Knowns where
+>   arbitrary = do
+>       squares <- listOf arbitrary
+>       values  <- vectorOf (length squares) $ elements $ S.toList values
+>       return $ M.fromList (zip squares values)
 
-> crossSet :: [a] -> [a] -> S.Set a
-> crossSet xs ys = S.fromList $ cross xs ys
+> instance Arbitrary Grid where
+>   arbitrary = do
+>       k <- arbitrary
+>       return $ M.foldWithKey assign emptyGrid k
 
 > instance Show Grid where
 >   show (Grid k uk) = unlines rows
@@ -554,3 +624,29 @@ Appendix
 >           divide i [] = []
 >           divide i xs = case splitAt i xs of
 >               (l, r) -> l : divide i r
+
+> cross :: [a] -> [a] -> [[a]]
+> cross xs ys = [join x y | x <- xs, y <- ys]
+
+> crossSet :: Ord a => [a] -> [a] -> S.Set [a]
+> crossSet xs ys = S.fromList $ cross xs ys
+
+> foldAdjust :: Ord k => (a -> a) -> S.Set k -> M.Map k a -> M.Map k a
+> foldAdjust f ks m = foldl (\m' k -> M.adjust f k m') m (S.toList ks)
+
+> join :: a -> a -> [a]
+> join a b = a:b:[]
+
+> justLookup :: Ord k => k -> M.Map k a -> a
+> justLookup k m = fromJust $ M.lookup k m
+
+> lookupKeys :: Ord k => [k] -> M.Map k v -> [v]
+> lookupKeys ks m = catMaybes $ foldl (\vs k -> M.lookup k m : vs) [] ks
+
+> lookupKeySet :: Ord k => Ord v => S.Set k -> M.Map k v -> S.Set v
+> lookupKeySet ks = S.fromList . lookupKeys (S.toList ks)
+
+> pickOne :: [a] -> IO a
+> pickOne xs = do
+>   r <- randomRIO (0, length xs - 1)
+>   return $ xs !! r
