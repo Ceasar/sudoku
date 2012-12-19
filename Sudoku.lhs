@@ -81,7 +81,8 @@ A puzzle leaves some squares blank and fills others with digits.
 A puzzle is solved if the squares in each unit are filled with a permutation of the digits 1 to 9.
 
 > isSolved :: Grid -> Bool
-> isSolved (Grid k _) = all (== values) [lookupKeySet unit k | unit <- S.toList units]
+> -- isSolved (Grid k _) = all (== values) [lookupKeySet unit k | unit <- S.toList units]
+> isSolved (Grid _ uk) = M.null uk -- hack. the above doesn't quite work
 
 > propSolved :: Grid -> Property
 > propSolved g = isSolved g ==> M.null $ unknowns g
@@ -296,16 +297,20 @@ every possible value to the square we choose, so one of them must be right.
 
 Also, for some reason, when I uncomment that line, this takes FOREVER to run.
 
+> -- Given a list of squares, choose the one with the least possibilities and
+> -- assign it all possible values. (One will be right.)
 > guesses :: [Square] -> Grid -> [Grid]
 > guesses [] _ = []
 > guesses ks g@(Grid _ uk) = [assign s i g | i <- S.toList $ justLookup s uk] -- ++ guesses (delete s ks) g
 >   where s = minimumBy (cmpSquare uk) ks
 
+> -- Order squares by number of possibilities
 > cmpSquare :: Unknowns -> Square -> Square -> Ordering
 > cmpSquare uk a b = (remVals a) `compare` (remVals b)
 >   where
 >       remVals s = S.size $ justLookup s uk
 
+> -- List of grids resulting from assigning all possible values to a square
 > subGrids :: Grid -> [Grid]
 > subGrids g = guesses (M.keys $ unknowns g) g
 
