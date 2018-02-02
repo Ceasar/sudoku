@@ -179,10 +179,10 @@ Solving Puzzles
 
 At this point, we are ready to start solving puzzles.
 
-Constraint Propogation
+Constraint Propagation
 ----------------------
 
-To solve simple puzzles, it is possible just to propogate constraints until
+To solve simple puzzles, it is possible just to propagate constraints until
 the puzzle is solved.
 
 For instance, one constraint is that if all of the squares in a unit are known
@@ -257,13 +257,13 @@ we're shopping, let's say we also pick up a time machine and go back 13 billion
 years to the origin of the universe and start our program running. We can then
 compute that we'd be almost 1% done with this one puzzle by now.
 
-The second choice is to somehow process more than one possiblity per machine
+The second choice is to somehow process more than one possibility per machine
 instruction. That seems impossible, but fortunately it is exactly what
-constraint propgation does for us. We don't have to try every possiblity because
-as soon as we try one, we immediately eliminate many other possibilities. For
-example, if we try an assignment and discover a contradiction, then we've
-eliminated not just one possiblity, but fully half of the choices we would have
-had to make.
+constraint propagation does for us. We don't have to try every possibility
+because as soon as we try one, we immediately eliminate many other
+possibilities. For example, if we try an assignment and discover a
+contradiction, then we've eliminated not just one possibility, boot fully half
+of the choices we would have had to make.
 
 > hasContradiction :: Grid -> Bool
 > hasContradiction = not . M.null . M.filter S.null . unknowns
@@ -274,11 +274,13 @@ solution or contradiction, and if not, choose one unfilled square and consider
 all its possible values. One at a time, try assigning the square each value, and
 searching from the resulting position.
 
-What Norvig is describing is an instance of a backtracking algorithm, which has three main components.
+What Norvig is describing is an instance of a backtracking algorithm, which has
+three main components.
 
 Formally, a backtracking algorithm needs three parts:
 
-A reject function which always evaluates True will result in a backtracking algorithm that is equivalent to a brute force search.
+A reject function which always evaluates True will result in a backtracking
+algorithm that is equivalent to a brute force search.
 
 > solutions :: Eq a => (a -> Bool) -> (a -> Bool) -> (a -> [a]) -> a -> [a]
 > solutions reject accept children root
@@ -291,9 +293,10 @@ A reject function which always evaluates True will result in a backtracking algo
 >   [] -> Nothing
 >   (y:_) -> Just y
 
-Note, when generating children, we actually only need to find one square and try that.
-Generating the full list of possible children is unnecessary since we try to assign
-every possible value to the square we choose, so one of them must be right.
+Note, when generating children, we actually only need to find one square and
+try that.  Generating the full list of possible children is unnecessary since
+we try to assign every possible value to the square we choose, so one of them
+must be right.
 
 Also, for some reason, when I uncomment that line, this takes FOREVER to run.
 
@@ -398,7 +401,7 @@ If we were not too picky, to generate a puzzle we might do the following:
 1. First generate a random valid grid.
 2. Remove values from the grid until we reach the difficulty level we are happy with.
 
-This procedure will guarantee that solution always exists. However, for many
+This procedure will guarantee that a solution always exists. However, for many
 sorts of puzzles, Sudoku included, a puzzle is considered good only if it has
 exactly one solution.
 
@@ -499,7 +502,7 @@ that has only one solution.
 >   if hasMultipleSolutions p then genPuzzle2 i else return p
 
 However, this quickly becomes intractable. At N = 17, it starts taking a few
-seconds to complete. N = 20 is unbearable. As dicussed above, to see that a
+seconds to complete. N = 20 is unbearable. As discussed above, to see that a
 puzzle has exactly one solution involves testing every way of solving the
 puzzle.
 
