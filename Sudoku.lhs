@@ -504,7 +504,7 @@ We can fix this naively, by just generating puzzles until we find one
 that has only one solution.
 
 > hasMultipleSolutions :: Grid -> Bool
-> hasMultipleSolutions g = length (solutions' g) > 1
+> hasMultipleSolutions g = (length $ take 2 (solutions' g)) > 1
 
 > genPuzzle2 :: Int -> IO Grid
 > genPuzzle2 0 = genGrid
