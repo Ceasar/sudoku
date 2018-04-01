@@ -4,7 +4,11 @@ Sudoku solver and generator.
 
 # Running the program
 
+This requires System.Random and Test.Quickcheck.
+
 ```
+$ cabal update && cabal install random
+
 ghci
 $ :l Sudoku
 $ readGrid "puzzles/easy.sudoku"

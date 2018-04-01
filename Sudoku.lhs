@@ -60,8 +60,11 @@ A collection of nine squares (column, row, or box) is called a unit.
 
 Squares that share a unit are peers.
 
-> peers :: M.Map Square (S.Set Square)
-> peers = M.fromList $ [(s, S.delete s $ S.fold S.union S.empty $ S.filter (S.member s) units) | s <- S.toList squares]
+> peers' :: M.Map Square (S.Set Square)
+> peers' = M.fromList $ [(s, S.delete s $ S.fold S.union S.empty $ S.filter (S.member s) units) | s <- S.toList squares]
+
+> peers :: Square -> (S.Set Square)
+> peers s = justLookup s peers'
 
 Every square has exactly 3 units and 20 peers.
 
@@ -69,7 +72,7 @@ Every square has exactly 3 units and 20 peers.
 > propUnits s = S.size (S.filter (S.member s) units) == 3
 
 > propPeers :: Square -> Bool
-> propPeers s = S.size (justLookup s peers) == 20
+> propPeers s = S.size (peers s) == 20
 
 A puzzle leaves some squares blank and fills others with digits.
 
@@ -97,7 +100,7 @@ Representation
 Abstractly, we represent a grid as two maps.
 
 The first is a map between Squares and known values.
-The second is a map between Squares and the possibilties for the square there.
+The second is a map between Squares and the possibilities for the square there.
 
 > type Knowns = M.Map Square Value
 > type Unknowns = M.Map Square (S.Set Value)
@@ -164,15 +167,18 @@ values, updating the information in our unknown map on each assignment.
 >       f m (_, Nothing) = m
 
 > exclude :: Square -> Grid -> Grid
-> exclude s (Grid k uk) = Grid k (foldAdjust (S.delete v) (justLookup s peers) uk)
+> exclude s (Grid k uk) = Grid k (foldAdjust (S.delete v) (peers s) uk)
 >   where
 >       v = justLookup s k
 
 > assign :: Square -> Value -> Grid -> Grid
 > assign s v (Grid k uk) = Grid (M.insert s v k) (M.delete s uk)
 
+> fill :: Square -> Value -> Grid -> Grid
+> fill s v g = exclude s $ assign s v g
+
 > parseGrid :: String -> Grid
-> parseGrid = M.foldWithKey (\s v -> exclude s . assign s v) emptyGrid . initialValues
+> parseGrid = M.foldrWithKey fill emptyGrid . initialValues
 
 Solving Puzzles
 ===============
@@ -191,7 +197,7 @@ except one, the last one can be deduced.
 > simplify :: Grid -> Grid
 > simplify g
 >   | M.null singletons = g
->   | otherwise = simplify $ M.foldWithKey (\s v -> exclude s . assign s v) g $ M.map S.findMin singletons
+>   | otherwise = simplify $ M.foldrWithKey fill g $ M.map S.findMin singletons
 >   where
 >       singletons = M.filter ((== 1) . S.size) $ unknowns g
 
@@ -211,7 +217,7 @@ from application of the above rule.
     . . 5|. 1 .|3 . .       6 9 5|4 1 7|3 8 2
 
 And here is a puzzle and its partial solution, also derived from the
-propgating the above rule.
+propagating the above rule.
 
     . . .|. . .|9 . 7       . . .|. . .|9 . 7
     . . .|4 2 .|1 8 .       . . .|4 2 .|1 8 .
@@ -243,7 +249,7 @@ The other route is to _search_ for a solution.
 Search
 ------
 
-Searching involves systematically trying all the possiblities until we hit one
+Searching involves systematically trying all the possibilities until we hit one
 that works. The code for this is less than a dozen lines, but we run another
 risk: the program might take forever to run. How can we cope with this?
 
@@ -262,12 +268,14 @@ instruction. That seems impossible, but fortunately it is exactly what
 constraint propagation does for us. We don't have to try every possibility
 because as soon as we try one, we immediately eliminate many other
 possibilities. For example, if we try an assignment and discover a
-contradiction, then we've eliminated not just one possibility, boot fully half
+contradiction, then we've eliminated not just one possibility, but fully half
 of the choices we would have had to make.
+
+In Sudoku, a contradiction exists if a grid contains an empty square with no
+possible values.
 
 > hasContradiction :: Grid -> Bool
 > hasContradiction = not . M.null . M.filter S.null . unknowns
-
 
 What is the search algorithm? Simple: first make sure we haven't already found a
 solution or contradiction, and if not, choose one unfilled square and consider
@@ -275,9 +283,8 @@ all its possible values. One at a time, try assigning the square each value, and
 searching from the resulting position.
 
 What Norvig is describing is an instance of a backtracking algorithm, which has
-three main components.
-
-Formally, a backtracking algorithm needs three parts:
+three main components: a reject function, an accept function, and a way to
+generate the set of next states from a given state.
 
 A reject function which always evaluates True will result in a backtracking
 algorithm that is equivalent to a brute force search.
@@ -304,7 +311,7 @@ Also, for some reason, when I uncomment that line, this takes FOREVER to run.
 > -- assign it all possible values. (One will be right.)
 > guesses :: [Square] -> Grid -> [Grid]
 > guesses [] _ = []
-> guesses ks g@(Grid _ uk) = [assign s i g | i <- S.toList $ justLookup s uk] -- ++ guesses (delete s ks) g
+> guesses ks g@(Grid _ uk) = [fill s v g | v <- S.toList $ justLookup s uk] -- ++ guesses (delete s ks) g
 >   where s = minimumBy (cmpSquare uk) ks
 
 > -- Order squares by number of possibilities
@@ -336,7 +343,7 @@ for a solution from the result of assigning square 's' to 'd'. If the search
 leads to a failed position, go back and consider another value of 'd'.
 
 This is a _recursive_ search, and we call it a "depth-first search" because
-we (recursively) consider all possiblity values before we consider a different
+we (recursively) consider all possibility values before we consider a different
 value for 's'.
 
 There are two choices we have to make in implementing the search:
@@ -436,8 +443,8 @@ and then run our solver to complete the grid.
 
 > genGrid :: IO Grid
 > genGrid = do
->   s <- pickOne (S.toList squares)
->   return $ fromJust $ solve $ assign s 1 emptyGrid -- known to be multiple solutions
+>   s <- pickOne $ S.toList squares
+>   return $ fromJust $ solve $ fill s 1 emptyGrid -- known to be multiple solutions
 
 Kind of hacky, but this works for now.
 
@@ -448,19 +455,23 @@ Removing a value from the grid is procedurally pretty simple. We just delete
 it from the list of knowns, add it to the unknowns along with all the possible
 values it can take on, and update each of its peers to include it.
 
-> addToPeers :: Square -> Int -> Unknowns -> Unknowns
-> addToPeers s i g = foldAdjust (S.insert i) (justLookup s peers) g
-
 > getPossibleValues :: Square -> Knowns -> S.Set Int
 > getPossibleValues s k = S.difference values $ S.fromList $ M.elems pmap
 >   where
->       pmap = M.filterWithKey (\k' a -> S.member k' (justLookup s peers)) k
+>       pmap = M.filterWithKey (\k' a -> S.member k' (peers s)) k
+
+> updatePeers :: Square -> Grid -> Grid
+> updatePeers s g@(Grid ks uks) = Grid ks uks'
+>   where
+>       updatePeers' k _ = getPossibleValues k ks
+>       updatePeer uks'' p = M.adjustWithKey updatePeers' p uks''
+>       uks' = foldl updatePeer uks (S.toList $ peers s)
 
 > unassign :: Square -> Grid -> Grid
-> unassign s (Grid k uk) = Grid (M.delete s k) (addToPeers s i $ M.insert s ps uk)
+> unassign s (Grid k uk) = updatePeers s g
 >   where
 >       ps = getPossibleValues s k
->       i = fromJust $ M.lookup s k
+>       g = Grid (M.delete s k) (M.insert s ps uk)
 
 Generation
 ----------
@@ -534,7 +545,7 @@ and remove a value while ensuring that the grid still has exactly one soluton.
 
 For instance, the grid below is known to have one solution.
 
-Can you remove a value and prove it still has one soluton?
+Can you remove a value and prove it still has one solution?
 
     1 5 . 2 . 4 7 8 . 
     7 8 9 5 1 6 2 3 4 
@@ -563,7 +574,7 @@ information from the board.
 >   where
 >       v = justLookup s k
 
-Every other method can be reduced to removing possiblities only, so  that in
+Every other method can be reduced to removing possibilities only, so  that in
 the end, the only method to reveal a value on the board is this method.
 
 > -- Given a known value, add it to the possibilities of all its peers
@@ -571,7 +582,7 @@ the end, the only method to reveal a value on the board is this method.
 > exclude' s g@(Grid k uk) = Grid k (foldAdjust (S.insert v) ps uk)
 >   where
 >       v = justLookup s k
->       ps = S.filter (\p -> M.member p uk) (justLookup s peers)
+>       ps = S.filter (\p -> M.member p uk) (peers s)
 
 And more...
 
@@ -622,7 +633,7 @@ Appendix
 > instance Arbitrary Grid where
 >   arbitrary = do
 >       k <- arbitrary
->       return $ M.foldWithKey assign emptyGrid k
+>       return $ M.foldrWithKey assign emptyGrid k
 
 > instance Show Grid where
 >   show (Grid k uk) = unlines rows
